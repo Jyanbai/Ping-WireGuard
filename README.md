@@ -1,6 +1,6 @@
 # Ping-WireGuard
 
-面向中文用户的 WireGuard 链式中转管理脚本。它在落地服务器上提供 WireGuard 入站，用 sing-box TUN 只接管来自 WireGuard 接口的客户端流量，再把流量送往当前选择的 VLESS 或 Shadowsocks 外部节点。
+面向中文用户的 WireGuard 落地与链式中转管理脚本。它在落地服务器上提供 WireGuard 入站，用 sing-box TUN 只接管来自 WireGuard 接口的客户端流量；默认从服务器公网直接落地，也可以按需切换到 VLESS 或 Shadowsocks 外部节点。
 
 > v1 定位为单机、单管理员、首个 WireGuard 客户端。节点可导入多个并随时切换。运行代码全部为 Bash，不依赖 jq。
 
@@ -74,7 +74,7 @@ sudo ./install.sh
 sudo ping-wg
 ```
 
-客户端配置位于 `/etc/ping-wireguard/client.conf`，权限为 `0600`。请通过安全通道复制后导入 WireGuard 客户端。
+客户端配置位于 `/etc/ping-wireguard/client.conf`，权限为 `0600`。安装后无需导入外部节点即可直接使用 WireGuard，通过服务器公网出口访问网络。
 
 在菜单选择“查看客户端配置 / 二维码”，或直接执行：
 
@@ -82,7 +82,7 @@ sudo ping-wg
 sudo ping-wg show
 ```
 
-脚本会把配置另存为 `/root/ping-wireguard-client_<时间>.conf`，在终端显示完整配置，并使用 `qrencode` 生成可由 WireGuard Android/iOS 客户端扫描的二维码。配置和二维码均包含客户端私钥，请勿截图或公开分享。
+脚本会生成 Hiddify 等客户端兼容的 `wg://` 分享链接，把配置另存为 `/root/ping-wireguard-client_<时间>.conf`，并使用 `qrencode` 生成可由 WireGuard Android/iOS 客户端扫描的二维码。`wg://` 并非 WireGuard 官方通用标准，官方客户端请使用 `.conf` 或二维码。所有输出均包含客户端私钥，请勿截图或公开分享。
 
 ### 已有服务保护
 
@@ -96,9 +96,9 @@ sudo ping-wg show
 Ping-WireGuard 管理菜单
 
   1. 一键安装
-  2. 导入外部节点
-  3. 查看当前节点与状态
-  4. 切换出站节点
+  2. 导入外部节点（可选）
+  3. 查看当前出口与状态
+  4. 切换出口（本机直连 / 外部节点）
   5. 查看客户端配置 / 二维码
   6. 重启服务
   7. 查看日志
@@ -109,9 +109,9 @@ Ping-WireGuard 管理菜单
 
 “重新配置”只更新 WireGuard/MTU/地址等配置并重启服务，不重复安装软件。服务端与客户端密钥会保留。
 
-## 导入节点
+## 可选外部节点
 
-在菜单选择 `2`，直接粘贴分享链接：
+WireGuard 默认使用服务器公网直连出口，不要求导入节点。需要链式中转时，在菜单选择 `2` 并粘贴分享链接：
 
 ```text
 vless://UUID@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&path=%2Fws#香港
@@ -150,11 +150,11 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
 - 节点原始 URI：`/etc/ping-wireguard/nodes/<id>.uri`
 - 节点 outbound JSON：`/etc/ping-wireguard/nodes/<id>.json`
 - 无凭据索引：`/etc/ping-wireguard/nodes.tsv`
-- 当前节点 ID：`/etc/ping-wireguard/current-node`
+- 当前外部节点 ID：`/etc/ping-wireguard/current-node`（文件不存在表示本机直连）
 
 目录和凭据文件只允许 root 访问。切换时会先渲染临时配置并执行 `sing-box check`，校验成功才原子替换正式配置；服务重启失败时会尝试回滚原节点。
 
-未选择节点时使用 `block` 占位 outbound：服务可以启动和诊断，但客户端流量会失败关闭（fail closed），不会从落地机公网出口意外直连。实际链式中转前必须导入并选择外部节点。
+默认使用 sing-box `direct` outbound，从服务器公网直接落地。导入 VLESS/SS 后可从菜单切换为外部代理出口，也可随时切回“本机直连”。即使使用直连，流量仍经过 sing-box TUN；sing-box 停止后项目本身不配置 SNAT，因此不会自动绕过到公网。
 
 ## sing-box 配置模板
 
@@ -176,7 +176,7 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
     }
   ],
   "outbounds": [
-    "由 import-node.sh 生成的当前节点 outbound"
+    "本机 direct，或由 import-node.sh 生成的当前外部节点 outbound"
   ],
   "route": {
     "auto_detect_interface": true,
@@ -252,7 +252,7 @@ bash tests/test-bootstrap.sh
 bash tests/test-client-config.sh
 ```
 
-测试覆盖一键脚本离线自举、客户端配置导出/二维码降级，以及 VLESS Reality/gRPC、VLESS WebSocket、SIP002 Shadowsocks、旧式 Shadowsocks、IPv6、插件、错误拒绝、模板占位符和 JSON 语法。
+测试覆盖一键脚本离线自举、默认直连/代理切换、客户端 `wg://` 分享链接、配置导出/二维码降级，以及 VLESS Reality/gRPC、VLESS WebSocket、SIP002 Shadowsocks、旧式 Shadowsocks、IPv6、插件、错误拒绝、模板占位符和 JSON 语法。
 
 ## 卸载
 

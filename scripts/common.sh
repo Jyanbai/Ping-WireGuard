@@ -7,7 +7,7 @@ fi
 readonly PING_WG_COMMON_LOADED=1
 
 readonly PROJECT_NAME="Ping-WireGuard"
-readonly PROJECT_VERSION="1.1.0"
+readonly PROJECT_VERSION="1.2.0"
 
 PING_WG_LIB_DIR="${PING_WG_LIB_DIR:-/usr/local/lib/ping-wireguard}"
 PING_WG_CONFIG_DIR="${PING_WG_CONFIG_DIR:-/etc/ping-wireguard}"

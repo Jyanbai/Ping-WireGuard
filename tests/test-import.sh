@@ -77,6 +77,27 @@ if command -v python >/dev/null 2>&1; then
 fi
 
 generate_singbox_config
-grep -q '"type":"block","tag":"proxy"' "$PING_WG_SB_CONFIG" || fail '未选择节点时没有 fail closed'
+grep -q '"type":"direct","tag":"proxy"' "$PING_WG_SB_CONFIG" || fail '未选择节点时没有使用本机直连'
+assert_has "$(show_current_node)" '当前出口：本机直连'
+
+service_restart() { return 1; }
+if set_current_node "$node_id" 2>/dev/null; then fail '代理切换重启失败时未返回错误'; fi
+if current_node_id >/dev/null 2>&1; then fail '代理切换失败后未回滚到直连'; fi
+grep -q '"type":"direct","tag":"proxy"' "$PING_WG_SB_CONFIG" || fail '代理切换失败后配置未回滚'
+
+service_restart() { return 0; }
+set_current_node "$node_id"
+assert_eq "$(current_node_id)" "$node_id"
+
+service_restart() { return 1; }
+if set_direct_outbound 2>/dev/null; then fail '直连切换重启失败时未返回错误'; fi
+assert_eq "$(current_node_id)" "$node_id"
+grep -q '"type":"vless"' "$PING_WG_SB_CONFIG" || fail '直连切换失败后未回滚代理配置'
+
+service_restart() { return 0; }
+set_direct_outbound
+if current_node_id >/dev/null 2>&1; then fail '切回直连后仍保留 current-node'; fi
+grep -q '"type":"direct","tag":"proxy"' "$PING_WG_SB_CONFIG" || fail '切回直连后配置不正确'
+assert_has "$(list_nodes)" '本机直连'
 
 printf 'PASS: import-node 与 sing-box 模板测试通过\n'

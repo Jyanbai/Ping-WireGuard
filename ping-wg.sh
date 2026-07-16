@@ -51,7 +51,7 @@ action_import() {
 }
 
 action_status() {
-    printf '\n%s当前节点%s\n' "$C_BOLD" "$C_RESET"
+    printf '\n%s当前出口%s\n' "$C_BOLD" "$C_RESET"
     show_current_node
     printf '\n%s服务状态%s\n' "$C_BOLD" "$C_RESET"
     printf 'WireGuard：%s\nsing-box：%s\n' "$(service_state ping-wireguard-wg)" "$(service_state ping-wireguard-singbox)"
@@ -111,9 +111,9 @@ print_menu() {
     clear 2>/dev/null || true
     printf '%sPing-WireGuard 管理菜单%s  v%s\n\n' "$C_BOLD" "$C_RESET" "$PROJECT_VERSION"
     printf '  1. 一键安装\n'
-    printf '  2. 导入外部节点\n'
-    printf '  3. 查看当前节点与状态\n'
-    printf '  4. 切换出站节点\n'
+    printf '  2. 导入外部节点（可选）\n'
+    printf '  3. 查看当前出口与状态\n'
+    printf '  4. 切换出口（本机直连 / 外部节点）\n'
     printf '  5. 查看客户端配置 / 二维码\n'
     printf '  6. 重启服务\n'
     printf '  7. 查看日志\n'

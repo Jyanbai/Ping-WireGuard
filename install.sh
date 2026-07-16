@@ -325,9 +325,7 @@ perform_install() {
     printf '\n'
     log_ok "Ping-WireGuard v${PROJECT_VERSION} 安装完成。"
     printf '管理命令：ping-wg\n客户端配置：%s\n' "$PING_WG_CLIENT_CONFIG"
-    if ! current_node_id >/dev/null 2>&1; then
-        log_warn "当前尚未导入外部节点，请运行 ping-wg 并选择“导入外部节点”。"
-    fi
+    log_ok "默认使用本机直连出口；VLESS/Shadowsocks 外部节点可按需导入。"
 }
 
 if [[ ${BASH_SOURCE[0]:-} == "$0" ]]; then

@@ -5,6 +5,60 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=common.sh
 . "${SCRIPT_DIR}/common.sh"
 
+trim_client_value() {
+    local value=$1
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    printf '%s' "$value"
+}
+
+client_config_value() {
+    local wanted_section=$1 wanted_key=$2 section='' line key value
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        if [[ $line =~ ^\[([^]]+)\]$ ]]; then
+            section=${BASH_REMATCH[1]}
+            continue
+        fi
+        [[ $section == "$wanted_section" && $line == *=* ]] || continue
+        key=$(trim_client_value "${line%%=*}")
+        [[ $key == "$wanted_key" ]] || continue
+        value=$(trim_client_value "${line#*=}")
+        printf '%s' "$value"
+        return 0
+    done < "$PING_WG_CLIENT_CONFIG"
+    return 1
+}
+
+uri_encode() {
+    local LC_ALL=C input=$1 output='' char i hex
+    for ((i=0; i<${#input}; i++)); do
+        char=${input:i:1}
+        case "$char" in
+            [A-Za-z0-9._~-]) output+=$char ;;
+            *) printf -v hex '%%%02X' "'$char"; output+=$hex ;;
+        esac
+    done
+    printf '%s' "$output"
+}
+
+generate_wg_share_link() {
+    local private_key address peer_public_key endpoint mtu preshared_key link
+    private_key=$(client_config_value Interface PrivateKey) || return 1
+    address=$(client_config_value Interface Address) || return 1
+    mtu=$(client_config_value Interface MTU 2>/dev/null || printf '1380')
+    peer_public_key=$(client_config_value Peer PublicKey) || return 1
+    endpoint=$(client_config_value Peer Endpoint) || return 1
+    preshared_key=$(client_config_value Peer PresharedKey 2>/dev/null || true)
+
+    link="wg://${endpoint}/?pk=$(uri_encode "$private_key")"
+    link+="&local_address=$(uri_encode "$address")"
+    link+="&peer_pk=$(uri_encode "$peer_public_key")"
+    [[ -z $preshared_key ]] || link+="&pre_shared_key=$(uri_encode "$preshared_key")"
+    link+="&mtu=$(uri_encode "$mtu")&reserved=0,0,0#Ping-WireGuard"
+    printf '%s' "$link"
+}
+
 export_client_config() {
     local timestamp destination suffix=0
     [[ -s $PING_WG_CLIENT_CONFIG ]] || {
@@ -33,9 +87,15 @@ export_client_config() {
 }
 
 show_client_config() {
+    local share_link
+    share_link=$(generate_wg_share_link) || {
+        log_error "客户端配置字段不完整，无法生成 WireGuard 分享链接。"
+        return 1
+    }
     export_client_config || return 1
 
     printf '\n========== WireGuard 客户端配置 ==========\n\n'
+    printf '【WireGuard 分享链接】（包含私钥；兼容 Hiddify 等支持 wg:// 的客户端）\n%s\n\n' "$share_link"
     printf '【配置文件】\n  已保存: %s\n\n' "$EXPORTED_CLIENT_CONFIG"
     printf '【客户端配置】（包含私钥，请勿公开分享）\n\n'
     cat "$PING_WG_CLIENT_CONFIG"
@@ -54,5 +114,6 @@ show_client_config() {
     printf '\n【导入方式】\n'
     printf '  手机：WireGuard → 添加隧道 → 扫描二维码\n'
     printf '  电脑：安全复制 %s 后导入 WireGuard 客户端\n' "$EXPORTED_CLIENT_CONFIG"
-    printf '\n说明：WireGuard 没有通用分享链接，二维码内容就是完整客户端 .conf。\n'
+    printf '  Hiddify：从剪贴板导入上方 wg:// 链接\n'
+    printf '\n说明：wg:// 不是 WireGuard 官方通用标准；官方客户端请使用 .conf 或二维码。\n'
 }
