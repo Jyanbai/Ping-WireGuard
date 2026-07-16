@@ -36,4 +36,17 @@ pipe_output=$(PING_WG_BOOTSTRAP_ONLY=1 \
     exit 1
 }
 
+rm -f "${TEST_TMP}/archive/Ping-WireGuard-main/scripts/client.sh"
+tar -czf "${TEST_TMP}/incomplete.tar.gz" -C "${TEST_TMP}/archive" Ping-WireGuard-main
+if incomplete_output=$(PING_WG_BOOTSTRAP_ONLY=1 \
+    PING_WG_ARCHIVE_URL="${TEST_TMP}/incomplete.tar.gz" \
+    bash < "${TEST_TMP}/standalone-install.sh" 2>&1); then
+    printf 'FAIL: 缺少 client.sh 的下载包未被拒绝\n' >&2
+    exit 1
+fi
+[[ $incomplete_output == *'下载的项目文件不完整'* ]] || {
+    printf 'FAIL: 下载包完整性错误提示不正确\n%s\n' "$incomplete_output" >&2
+    exit 1
+}
+
 printf 'PASS: install.sh 单文件自举测试通过\n'

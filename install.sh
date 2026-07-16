@@ -61,6 +61,7 @@ bootstrap_full_project() {
     tar -xzf "$archive" -C "$BOOTSTRAP_DIR"
     project_dir="${BOOTSTRAP_DIR}/${top}"
     [[ -r ${project_dir}/install.sh && -r ${project_dir}/scripts/common.sh && \
+       -r ${project_dir}/scripts/client.sh && \
        -r ${project_dir}/templates/sing-box.json.template ]] || {
         printf '[错误] 下载的项目文件不完整。\n' >&2
         exit 1
