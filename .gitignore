@@ -1,0 +1,9 @@
+# 本地测试与编辑器文件
+*.tmp
+*.swp
+.DS_Store
+.test.*/
+
+# 本地参考项目压缩包，不随源码发布
+mieru-OneClick-main.zip
+vless-all-in-one-main.zip
