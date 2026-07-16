@@ -1,14 +1,98 @@
 #!/usr/bin/env bash
 # Ping-WireGuard 一键安装入口。
-# 运行方式：chmod +x install.sh && sudo ./install.sh
+# 支持完整仓库执行，也支持 GitHub Raw 单文件自举安装。
 
 set -Eeuo pipefail
+
+readonly PING_WG_REPOSITORY="${PING_WG_REPOSITORY:-Jyanbai/Ping-WireGuard}"
+readonly PING_WG_REF="${PING_WG_REF:-main}"
+BOOTSTRAP_DIR=''
+
+bootstrap_cleanup() {
+    local tmp_root=${TMPDIR:-/tmp}
+    [[ $tmp_root == /* ]] || tmp_root=/tmp
+    if [[ -n ${BOOTSTRAP_DIR:-} && -d $BOOTSTRAP_DIR ]]; then
+        case "$BOOTSTRAP_DIR" in
+            "${tmp_root%/}"/ping-wireguard.*) rm -rf -- "$BOOTSTRAP_DIR" ;;
+            *) printf '[警告] 拒绝清理异常临时目录：%s\n' "$BOOTSTRAP_DIR" >&2 ;;
+        esac
+    fi
+}
+
+bootstrap_full_project() {
+    local tmp_root archive_url archive listing first_entry top project_dir status
+    command -v tar >/dev/null 2>&1 || {
+        printf '[错误] 一键安装需要 tar，请先安装 tar。\n' >&2
+        exit 1
+    }
+    [[ $PING_WG_REF =~ ^[A-Za-z0-9._/-]+$ ]] || {
+        printf '[错误] 非法的仓库分支或标签：%s\n' "$PING_WG_REF" >&2
+        exit 1
+    }
+
+    tmp_root=${TMPDIR:-/tmp}
+    [[ $tmp_root == /* ]] || tmp_root=/tmp
+    BOOTSTRAP_DIR=$(mktemp -d "${tmp_root%/}/ping-wireguard.XXXXXX") || exit 1
+    trap bootstrap_cleanup EXIT
+    archive="${BOOTSTRAP_DIR}/source.tar.gz"
+    archive_url=${PING_WG_ARCHIVE_URL:-"https://codeload.github.com/${PING_WG_REPOSITORY}/tar.gz/refs/heads/${PING_WG_REF}"}
+
+    printf '[信息] 正在下载 Ping-WireGuard 完整项目...\n'
+    if [[ -f $archive_url ]]; then
+        cp "$archive_url" "$archive"
+    else
+        command -v curl >/dev/null 2>&1 || {
+            printf '[错误] 一键安装需要 curl，请先安装 curl。\n' >&2
+            exit 1
+        }
+        curl -fL --retry 3 --connect-timeout 10 "$archive_url" -o "$archive"
+    fi
+    listing=$(tar -tzf "$archive")
+    if grep -Eq '(^/|(^|/)\.\.(/|$))' <<< "$listing"; then
+        printf '[错误] 下载包包含不安全路径，已停止安装。\n' >&2
+        exit 1
+    fi
+    first_entry=${listing%%$'\n'*}
+    top=${first_entry%%/*}
+    [[ $top =~ ^[A-Za-z0-9._-]+$ ]] || {
+        printf '[错误] 下载包目录结构异常。\n' >&2
+        exit 1
+    }
+    tar -xzf "$archive" -C "$BOOTSTRAP_DIR"
+    project_dir="${BOOTSTRAP_DIR}/${top}"
+    [[ -r ${project_dir}/install.sh && -r ${project_dir}/scripts/common.sh && \
+       -r ${project_dir}/templates/sing-box.json.template ]] || {
+        printf '[错误] 下载的项目文件不完整。\n' >&2
+        exit 1
+    }
+
+    if [[ ${PING_WG_BOOTSTRAP_ONLY:-0} == 1 ]]; then
+        printf 'BOOTSTRAP_OK\n'
+        exit 0
+    fi
+
+    export PING_WG_BOOTSTRAPPED=1
+    set +e
+    if [[ -r /dev/tty ]]; then
+        bash "${project_dir}/install.sh" "$@" < /dev/tty
+    else
+        printf '[注意] 未检测到交互终端，将按非交互模式继续。\n' >&2
+        bash "${project_dir}/install.sh" "$@"
+    fi
+    status=$?
+    set -e
+    exit "$status"
+}
+
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SOURCE_SCRIPTS="${ROOT_DIR}/scripts"
 
 [[ -r ${SOURCE_SCRIPTS}/common.sh ]] || {
-    printf '[错误] 请下载完整项目后运行 install.sh（缺少 scripts/common.sh）。\n' >&2
-    exit 1
+    [[ ${PING_WG_BOOTSTRAPPED:-0} != 1 ]] || {
+        printf '[错误] 自举完成后仍缺少 scripts/common.sh。\n' >&2
+        exit 1
+    }
+    bootstrap_full_project "$@"
 }
 
 # shellcheck source=scripts/common.sh
