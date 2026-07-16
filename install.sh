@@ -148,6 +148,32 @@ install_dependencies() {
     command_exists wg && command_exists wg-quick || die "WireGuard 工具安装失败。"
 }
 
+install_qrencode() {
+    command_exists qrencode && return 0
+    log_info "安装二维码工具 qrencode..."
+    case "$OS_FAMILY" in
+        debian)
+            apt-get install -y --no-install-recommends qrencode || \
+                log_warn "qrencode 安装失败，客户端配置仍可文本导出。"
+            ;;
+        rhel)
+            local pm
+            if command_exists dnf; then pm=dnf; else pm=yum; fi
+            if ! "$pm" -y install qrencode; then
+                if [[ $OS_ID != fedora ]] && "$pm" -y install epel-release && "$pm" -y install qrencode; then
+                    :
+                else
+                    log_warn "qrencode 安装失败，可启用 EPEL 后手动安装。"
+                fi
+            fi
+            ;;
+        alpine)
+            apk add --no-cache libqrencode-tools || \
+                log_warn "qrencode 安装失败，客户端配置仍可文本导出。"
+            ;;
+    esac
+}
+
 version_ge() {
     local have=${1%%-*} need=${2%%-*} a b i
     local -a hv nv
@@ -218,7 +244,7 @@ install_project_files() {
     install -m 0755 "$ROOT_DIR/install.sh" "$PING_WG_LIB_DIR/install.sh"
     install -m 0755 "$ROOT_DIR/ping-wg.sh" /usr/local/bin/ping-wg
     local file
-    for file in common.sh wg.sh singbox.sh import-node.sh firewall.sh services.sh; do
+    for file in common.sh wg.sh client.sh singbox.sh import-node.sh firewall.sh services.sh; do
         install -m 0755 "$SOURCE_SCRIPTS/$file" "$PING_WG_LIB_DIR/scripts/$file"
     done
     install -m 0644 "$ROOT_DIR/templates/sing-box.json.template" "$PING_WG_LIB_DIR/templates/sing-box.json.template"
@@ -283,6 +309,7 @@ perform_install() {
     fi
     guard_existing_singbox_service
     install_dependencies
+    install_qrencode
     install_singbox
     install_project_files
     ensure_directories

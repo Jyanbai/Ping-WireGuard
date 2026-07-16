@@ -7,7 +7,7 @@ fi
 readonly PING_WG_COMMON_LOADED=1
 
 readonly PROJECT_NAME="Ping-WireGuard"
-readonly PROJECT_VERSION="1.0.0"
+readonly PROJECT_VERSION="1.1.0"
 
 PING_WG_LIB_DIR="${PING_WG_LIB_DIR:-/usr/local/lib/ping-wireguard}"
 PING_WG_CONFIG_DIR="${PING_WG_CONFIG_DIR:-/etc/ping-wireguard}"
@@ -20,6 +20,7 @@ PING_WG_INDEX_FILE="${PING_WG_INDEX_FILE:-${PING_WG_CONFIG_DIR}/nodes.tsv}"
 PING_WG_SB_CONFIG="${PING_WG_SB_CONFIG:-${PING_WG_CONFIG_DIR}/sing-box.json}"
 PING_WG_WG_CONFIG="${PING_WG_WG_CONFIG:-/etc/wireguard/wg0.conf}"
 PING_WG_CLIENT_CONFIG="${PING_WG_CLIENT_CONFIG:-${PING_WG_CONFIG_DIR}/client.conf}"
+PING_WG_CLIENT_EXPORT_DIR="${PING_WG_CLIENT_EXPORT_DIR:-/root}"
 PING_WG_TEMPLATE="${PING_WG_TEMPLATE:-${PING_WG_LIB_DIR}/templates/sing-box.json.template}"
 
 if [[ -t 1 && ${NO_COLOR:-0} != 1 ]]; then

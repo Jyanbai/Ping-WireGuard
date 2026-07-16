@@ -62,7 +62,7 @@ sudo ./install.sh
 
 安装器会：
 
-1. 按发行版安装 WireGuard、curl、iproute2、nftables/iptables 等依赖。
+1. 按发行版安装 WireGuard、curl、iproute2、nftables/iptables，以及可选二维码工具 qrencode 等依赖。
 2. 安装或升级到兼容的 sing-box 稳定版（要求 1.10+）。
 3. 把管理文件安装到 `/usr/local/lib/ping-wireguard/`，把入口安装为 `/usr/local/bin/ping-wg`。
 4. 交互式生成 WireGuard 服务端和首个客户端配置。
@@ -75,6 +75,14 @@ sudo ping-wg
 ```
 
 客户端配置位于 `/etc/ping-wireguard/client.conf`，权限为 `0600`。请通过安全通道复制后导入 WireGuard 客户端。
+
+在菜单选择“查看客户端配置 / 二维码”，或直接执行：
+
+```bash
+sudo ping-wg show
+```
+
+脚本会把配置另存为 `/root/ping-wireguard-client_<时间>.conf`，在终端显示完整配置，并使用 `qrencode` 生成可由 WireGuard Android/iOS 客户端扫描的二维码。配置和二维码均包含客户端私钥，请勿截图或公开分享。
 
 ### 已有服务保护
 
@@ -91,11 +99,12 @@ Ping-WireGuard 管理菜单
   2. 导入外部节点
   3. 查看当前节点与状态
   4. 切换出站节点
-  5. 重启服务
-  6. 查看日志
-  7. 重新配置
-  8. 卸载
-  9. 退出
+  5. 查看客户端配置 / 二维码
+  6. 重启服务
+  7. 查看日志
+  8. 重新配置
+  9. 卸载
+  10. 退出
 ```
 
 “重新配置”只更新 WireGuard/MTU/地址等配置并重启服务，不重复安装软件。服务端与客户端密钥会保留。
@@ -186,6 +195,7 @@ Ping-WireGuard/
 ├── ping-wg.sh
 ├── scripts/
 │   ├── common.sh
+│   ├── client.sh
 │   ├── firewall.sh
 │   ├── import-node.sh
 │   ├── services.sh
@@ -195,6 +205,7 @@ Ping-WireGuard/
 │   └── sing-box.json.template
 ├── tests/
 │   ├── test-bootstrap.sh
+│   ├── test-client-config.sh
 │   └── test-import.sh
 ├── .gitignore
 ├── README.md
@@ -204,6 +215,7 @@ Ping-WireGuard/
 模块职责：
 
 - `common.sh`：路径、日志、系统检测、服务抽象、校验和设置持久化。
+- `client.sh`：客户端配置安全导出、终端展示与二维码生成。
 - `wg.sh`：密钥、服务端/客户端配置、IP 转发。
 - `import-node.sh`：URI/Base64/百分号解码、字段校验、JSON 转义和节点保存。
 - `singbox.sh`：模板渲染、配置校验、节点列表、切换与回滚。
@@ -237,13 +249,14 @@ OpenRC 的 sing-box 输出保存到 `/var/log/ping-wireguard/`。
 bash -n install.sh ping-wg.sh scripts/*.sh tests/*.sh
 bash tests/test-import.sh
 bash tests/test-bootstrap.sh
+bash tests/test-client-config.sh
 ```
 
-测试覆盖一键脚本离线自举，以及 VLESS Reality/gRPC、VLESS WebSocket、SIP002 Shadowsocks、旧式 Shadowsocks、IPv6、插件、错误拒绝、模板占位符和 JSON 语法。
+测试覆盖一键脚本离线自举、客户端配置导出/二维码降级，以及 VLESS Reality/gRPC、VLESS WebSocket、SIP002 Shadowsocks、旧式 Shadowsocks、IPv6、插件、错误拒绝、模板占位符和 JSON 语法。
 
 ## 卸载
 
-从菜单选择 `8`。卸载会删除项目服务、配置、密钥、节点和客户端文件，但保留系统安装的 WireGuard 与 sing-box 软件包，避免误伤其他用途。此前生成的 `wg0.conf.ping-wg.bak.*` 备份不会删除。
+从菜单选择 `9`。卸载会删除项目服务、配置、密钥、节点和客户端文件，但保留系统安装的 WireGuard 与 sing-box 软件包，避免误伤其他用途。此前生成的 `wg0.conf.ping-wg.bak.*` 备份不会删除。
 
 ## 上游文档
 

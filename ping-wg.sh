@@ -15,6 +15,8 @@ fi
 . "${LIB_DIR}/scripts/import-node.sh"
 # shellcheck source=scripts/wg.sh
 . "${LIB_DIR}/scripts/wg.sh"
+# shellcheck source=scripts/client.sh
+. "${LIB_DIR}/scripts/client.sh"
 # shellcheck source=scripts/singbox.sh
 . "${LIB_DIR}/scripts/singbox.sh"
 # shellcheck source=scripts/services.sh
@@ -66,6 +68,10 @@ action_restart() {
     log_ok "服务已重启。"
 }
 
+action_client_config() {
+    show_client_config
+}
+
 action_logs() {
     detect_init
     if [[ $INIT_SYSTEM == systemd ]]; then
@@ -108,11 +114,13 @@ print_menu() {
     printf '  2. 导入外部节点\n'
     printf '  3. 查看当前节点与状态\n'
     printf '  4. 切换出站节点\n'
-    printf '  5. 重启服务\n'
-    printf '  6. 查看日志\n'
-    printf '  7. 重新配置\n'
-    printf '  8. 卸载\n'
-    printf '  9. 退出\n\n'
+    printf '  5. 查看客户端配置 / 二维码\n'
+    printf '  6. 重启服务\n'
+    printf '  7. 查看日志\n'
+    printf '  8. 重新配置\n'
+    printf '  9. 卸载\n'
+    printf '  10. 退出\n\n'
+    printf '快捷命令：ping-wg show\n\n'
 }
 
 main_menu() {
@@ -121,24 +129,34 @@ main_menu() {
     while true; do
         load_settings 2>/dev/null || default_settings
         print_menu
-        read -r -p "请输入选项 [1-9]：" choice || return 0
+        read -r -p "请输入选项 [1-10]：" choice || return 0
         printf '\n'
         case "$choice" in
             1) action_install ;;
             2) action_import ;;
             3) action_status ;;
             4) select_node_interactive ;;
-            5) action_restart ;;
-            6) action_logs ;;
-            7) action_reconfigure ;;
-            8) action_uninstall; return 0 ;;
-            9) return 0 ;;
-            *) log_error "无效选项，请输入 1 到 9。" ;;
+            5) action_client_config ;;
+            6) action_restart ;;
+            7) action_logs ;;
+            8) action_reconfigure ;;
+            9) action_uninstall; return 0 ;;
+            10) return 0 ;;
+            *) log_error "无效选项，请输入 1 到 10。" ;;
         esac
         pause_menu
     done
 }
 
+dispatch_command() {
+    local command_name=${1:-}
+    case ${command_name,,} in
+        '') main_menu ;;
+        show|client-config|qr|--show) require_root; require_bash4; action_client_config ;;
+        *) log_error "未知命令：$1（可用命令：show）"; exit 2 ;;
+    esac
+}
+
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-    main_menu "$@"
+    dispatch_command "$@"
 fi
