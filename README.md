@@ -1,25 +1,15 @@
 # Ping-WireGuard
 
-面向中文用户的 WireGuard 落地与链式中转管理脚本。它在落地服务器上提供 WireGuard 入站，用 sing-box TUN 只接管来自 WireGuard 接口的客户端流量；默认从服务器公网直接落地，也可以按需切换到 VLESS 或 Shadowsocks 外部节点。
+面向中文用户的 WireGuard 落地与链式中转管理脚本。默认采用标准 WireGuard 转发与 MASQUERADE，从服务器公网直接落地；需要链式中转时，再启动 sing-box TUN，把 WireGuard 客户端流量转发到 VLESS 或 Shadowsocks 外部节点。
 
 > v1 定位为单机、单管理员、首个 WireGuard 客户端。节点可导入多个并随时切换。运行代码全部为 Bash，不依赖 jq。
 
 ## 数据流
 
 ```text
-WireGuard 客户端
-       │ UDP / wg0
-       ▼
-落地服务器 WireGuard 入站
-       │ 内核转发（仅 wg0 流量）
-       ▼
-sing-box TUN / pingtun0
-       │ 当前 outbound
-       ▼
-外部 VLESS 或 Shadowsocks 节点
-       │
-       ▼
-Internet
+本机直连：WireGuard 客户端 → wg0 → 内核转发 + MASQUERADE → 服务器公网
+
+链式中转：WireGuard 客户端 → wg0 → sing-box TUN → VLESS / Shadowsocks → Internet
 ```
 
 sing-box TUN 使用以下关键项：
@@ -30,7 +20,7 @@ sing-box TUN 使用以下关键项：
 - `route.auto_detect_interface`：避免 sing-box 外部节点连接再次进入 TUN 形成回环。
 - 默认 MTU 为 `1380`，WireGuard 与 TUN 保持一致，可在“重新配置”中调整。
 
-项目不对 WireGuard 客户端流量做 SNAT/MASQUERADE；真正的出口是 sing-box 代理 outbound。
+本机直连模式不依赖 sing-box，sing-box 服务显示 `inactive` 属于正常状态。只有选择外部节点后才启用 sing-box，并自动撤掉直连 MASQUERADE，避免流量旁路。
 
 ## 支持环境
 
@@ -65,7 +55,7 @@ sudo ./install.sh
 1. 按发行版安装 WireGuard、curl、iproute2、nftables/iptables，以及可选二维码工具 qrencode 等依赖。
 2. 安装或升级到兼容的 sing-box 稳定版（要求 1.10+）。
 3. 把管理文件安装到 `/usr/local/lib/ping-wireguard/`，把入口安装为 `/usr/local/bin/ping-wg`。
-4. 交互式生成 WireGuard 服务端和首个客户端配置。
+4. 交互式确认客户端连接入口、UDP 映射端口和公网网卡，生成带预共享密钥的服务端与首个客户端配置。
 5. 启用 IP 转发、防火墙规则、systemd/OpenRC 自启动和 sing-box 崩溃自动重启。
 
 安装完成后运行：
@@ -75,6 +65,29 @@ sudo ping-wg
 ```
 
 客户端配置位于 `/etc/ping-wireguard/client.conf`，权限为 `0600`。安装后无需导入外部节点即可直接使用 WireGuard，通过服务器公网出口访问网络。
+
+### NAT / 专线服务器特别说明
+
+脚本区分“客户端入站地址”和“落地出口 IP”。如果服务器网卡是 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` 或 CGNAT 地址，安装器不会把 ipify 检测到的出口 IP 自动写入客户端 Endpoint，而会要求手工填写服务商提供的外部连接入口。
+
+例如服务器信息为：
+
+```text
+内网 IP：192.168.50.10
+外部连接 IP：203.0.113.10（文档示例地址）
+可用端口：40000-40099
+```
+
+则可以填写：
+
+```text
+WireGuard UDP 监听/映射端口：40004
+客户端连接入口 IP/域名：203.0.113.10
+```
+
+不要把只能用于落地出网的 IP 写入 Endpoint。服务商控制台还必须将同一个端口以 **UDP** 协议映射/放行；TCP SSH 能连接不代表 UDP 已开放。移动优化入口等白名单地址需要作为 Endpoint 单独测试，并满足服务商规定的来源省份和运营商条件。
+
+从 v1.2 升级时，如果旧 Endpoint 与自动探测到的落地出口 IP 相同，脚本会要求确认。专线机器应选择不确认，然后填写真实的外部连接入口。
 
 在菜单选择“查看客户端配置 / 二维码”，或直接执行：
 
@@ -89,6 +102,7 @@ sudo ping-wg show
 - 如果安装前发现系统自带的 `sing-box.service` 正在运行，安装器会停止并提示，不会直接中断现有代理业务。
 - 如果 `/etc/wireguard/wg0.conf` 已存在且不是本项目生成，第一次写入前会备份为 `wg0.conf.ping-wg.bak.<时间>`。
 - 云厂商安全组仍需手动放行所选 WireGuard UDP 端口。
+- 既有 v1.2 配置升级后会补充 `PUBLIC_INTERFACE` 和客户端 PSK；重新配置会保留现有服务端、客户端密钥及 PSK。
 
 ## 数字管理菜单
 
@@ -154,11 +168,11 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
 
 目录和凭据文件只允许 root 访问。切换时会先渲染临时配置并执行 `sing-box check`，校验成功才原子替换正式配置；服务重启失败时会尝试回滚原节点。
 
-默认使用 sing-box `direct` outbound，从服务器公网直接落地。导入 VLESS/SS 后可从菜单切换为外部代理出口，也可随时切回“本机直连”。即使使用直连，流量仍经过 sing-box TUN；sing-box 停止后项目本身不配置 SNAT，因此不会自动绕过到公网。
+默认通过内核转发和 MASQUERADE 从服务器公网直接落地，不运行 sing-box。导入 VLESS/SS 后可从菜单切换为外部代理出口，也可随时切回“本机直连”；切换过程中会同步更新 sing-box 自启动状态和防火墙规则，失败时尝试回滚原出口。
 
 ## sing-box 配置模板
 
-模板位于 `templates/sing-box.json.template`，核心结构如下：
+模板位于 `templates/sing-box.json.template`，仅在使用外部节点时运行，核心结构如下：
 
 ```json
 {
@@ -176,7 +190,7 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
     }
   ],
   "outbounds": [
-    "本机 direct，或由 import-node.sh 生成的当前外部节点 outbound"
+    "由 import-node.sh 生成的当前外部节点 outbound"
   ],
   "route": {
     "auto_detect_interface": true,
@@ -206,7 +220,8 @@ Ping-WireGuard/
 ├── tests/
 │   ├── test-bootstrap.sh
 │   ├── test-client-config.sh
-│   └── test-import.sh
+│   ├── test-import.sh
+│   └── test-wg.sh
 ├── .gitignore
 ├── README.md
 └── LICENSE
@@ -250,9 +265,10 @@ bash -n install.sh ping-wg.sh scripts/*.sh tests/*.sh
 bash tests/test-import.sh
 bash tests/test-bootstrap.sh
 bash tests/test-client-config.sh
+bash tests/test-wg.sh
 ```
 
-测试覆盖一键脚本离线自举、默认直连/代理切换、客户端 `wg://` 分享链接、配置导出/二维码降级，以及 VLESS Reality/gRPC、VLESS WebSocket、SIP002 Shadowsocks、旧式 Shadowsocks、IPv6、插件、错误拒绝、模板占位符和 JSON 语法。
+测试覆盖一键脚本离线自举、直连/代理切换、PSK 两端一致性、NAT Endpoint、MASQUERADE 模式、客户端 `wg://` 分享链接、配置导出/二维码降级，以及 VLESS Reality/gRPC、VLESS WebSocket、SIP002 Shadowsocks、旧式 Shadowsocks、IPv6、插件、错误拒绝、模板占位符和 JSON 语法。
 
 ## 卸载
 
@@ -260,6 +276,7 @@ bash tests/test-client-config.sh
 
 ## 上游文档
 
+- [iwantruncom/WireGuard-install-cn](https://github.com/iwantruncom/WireGuard-install-cn)
 - [sing-box TUN inbound](https://sing-box.sagernet.org/configuration/inbound/tun/)
 - [sing-box VLESS outbound](https://sing-box.sagernet.org/configuration/outbound/vless/)
 - [sing-box Shadowsocks outbound](https://sing-box.sagernet.org/configuration/outbound/shadowsocks/)

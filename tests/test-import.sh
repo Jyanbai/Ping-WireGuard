@@ -30,6 +30,12 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_eq() { [[ $1 == "$2" ]] || fail "期望 [$2]，实际 [$1]"; }
 assert_has() { [[ $1 == *"$2"* ]] || fail "缺少片段 [$2]：$1"; }
 
+assert_eq "$(ipv4_network_cidr 10.66.66.1/24)" '10.66.66.0/24'
+is_non_public_ipv4 192.168.50.10 || fail '未识别 RFC1918 私网地址'
+if is_non_public_ipv4 203.0.113.10; then fail '误把公网格式地址识别为非公网'; fi
+valid_endpoint_host 203.0.113.10 || fail '公网 IPv4 Endpoint 被拒绝'
+if valid_endpoint_host 203.0.113.10:40004; then fail 'Endpoint 不应允许重复附加端口'; fi
+
 parse_node_uri 'vless://11111111-1111-4111-8111-111111111111@example.com:443?encryption=none&security=reality&sni=www.cloudflare.com&fp=chrome&pbk=abcDEF_123&sid=0123&type=grpc&serviceName=svc%2Fname#Hong%20Kong'
 assert_eq "$PARSED_TYPE" vless
 assert_eq "$PARSED_NAME" 'Hong Kong'
@@ -80,6 +86,8 @@ generate_singbox_config
 grep -q '"type":"direct","tag":"proxy"' "$PING_WG_SB_CONFIG" || fail '未选择节点时没有使用本机直连'
 assert_has "$(show_current_node)" '当前出口：本机直连'
 
+service_do() { return 0; }
+refresh_project_firewall() { return 0; }
 service_restart() { return 1; }
 if set_current_node "$node_id" 2>/dev/null; then fail '代理切换重启失败时未返回错误'; fi
 if current_node_id >/dev/null 2>&1; then fail '代理切换失败后未回滚到直连'; fi
@@ -89,12 +97,12 @@ service_restart() { return 0; }
 set_current_node "$node_id"
 assert_eq "$(current_node_id)" "$node_id"
 
-service_restart() { return 1; }
+refresh_project_firewall() { return 1; }
 if set_direct_outbound 2>/dev/null; then fail '直连切换重启失败时未返回错误'; fi
 assert_eq "$(current_node_id)" "$node_id"
 grep -q '"type":"vless"' "$PING_WG_SB_CONFIG" || fail '直连切换失败后未回滚代理配置'
 
-service_restart() { return 0; }
+refresh_project_firewall() { return 0; }
 set_direct_outbound
 if current_node_id >/dev/null 2>&1; then fail '切回直连后仍保留 current-node'; fi
 grep -q '"type":"direct","tag":"proxy"' "$PING_WG_SB_CONFIG" || fail '切回直连后配置不正确'

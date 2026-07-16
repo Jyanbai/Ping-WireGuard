@@ -251,7 +251,17 @@ install_project_files() {
     install -m 0644 "$ROOT_DIR/templates/sing-box.json.template" "$PING_WG_LIB_DIR/templates/sing-box.json.template"
 }
 
-detect_public_endpoint() {
+detect_primary_ipv4() {
+    local value=''
+    value=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' || true)
+    valid_ipv4 "$value" && printf '%s' "$value"
+}
+
+detect_default_interface() {
+    ip -4 route show default 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+}
+
+detect_egress_ipv4() {
     local value=''
     value=$(curl -4fsS --connect-timeout 5 https://api.ipify.org 2>/dev/null || true)
     if valid_ipv4 "$value"; then printf '%s' "$value"; return 0; fi
@@ -265,30 +275,51 @@ prompt_value() {
 }
 
 collect_settings() {
-    local detected=''
+    local primary_ipv4='' egress_ipv4=''
+    primary_ipv4=$(detect_primary_ipv4 || true)
     if ! load_settings; then
         default_settings
-        detected=$(detect_public_endpoint || true)
-        SERVER_ENDPOINT=$detected
+        PUBLIC_INTERFACE=$(detect_default_interface || true)
+        if [[ -n $primary_ipv4 ]] && ! is_non_public_ipv4 "$primary_ipv4"; then
+            SERVER_ENDPOINT=$primary_ipv4
+        fi
+    else
+        [[ -n $PUBLIC_INTERFACE ]] || PUBLIC_INTERFACE=$(detect_default_interface || true)
     fi
+    egress_ipv4=$(detect_egress_ipv4 || true)
     if [[ ! -t 0 ]]; then
         [[ -n $SERVER_ENDPOINT ]] || die "非交互安装请先通过已有 settings.conf 提供 SERVER_ENDPOINT。"
+        [[ -n $PUBLIC_INTERFACE ]] || die "非交互安装请先通过已有 settings.conf 提供 PUBLIC_INTERFACE。"
         return 0
     fi
     printf '\n%s基础配置%s（直接回车使用括号中的值）\n' "$C_BOLD" "$C_RESET"
-    prompt_value WG_PORT 'WireGuard UDP 端口' "$WG_PORT"
+    if [[ -n $primary_ipv4 ]] && is_non_public_ipv4 "$primary_ipv4"; then
+        log_warn "本机没有可直接入站的公网 IPv4。NAT/专线服务器必须填写服务商提供的外部连接 IP。"
+        [[ -z $egress_ipv4 ]] || log_warn "检测到落地出口 IP ${egress_ipv4}；它不一定能作为 WireGuard 入站地址，请勿直接照填。"
+        if [[ -n $SERVER_ENDPOINT && -n $egress_ipv4 && $SERVER_ENDPOINT == "$egress_ipv4" ]]; then
+            log_warn "当前 Endpoint 与落地出口 IP 相同。专线服务器上这通常是旧配置错误。"
+            confirm "确认 ${SERVER_ENDPOINT} 同时也是服务商提供的外部连接入口？" || SERVER_ENDPOINT=''
+        fi
+    elif [[ -z $SERVER_ENDPOINT ]]; then
+        log_warn "无法自动确定客户端连接入口，请手工填写公网 IP 或域名。"
+    fi
+    printf '提示：监听端口必须位于服务商分配的 UDP 端口范围，且与公网映射端口一致。\n'
+    prompt_value WG_PORT 'WireGuard UDP 监听/映射端口' "$WG_PORT"
+    prompt_value PUBLIC_INTERFACE '服务器默认公网网卡' "${PUBLIC_INTERFACE:-请填写}"
     prompt_value WG_SERVER_ADDRESS 'WireGuard 服务端地址/CIDR' "$WG_SERVER_ADDRESS"
     prompt_value WG_CLIENT_ADDRESS '首个客户端地址/CIDR' "$WG_CLIENT_ADDRESS"
     prompt_value WG_CLIENT_DNS '客户端 DNS' "$WG_CLIENT_DNS"
     prompt_value WG_MTU 'WireGuard/TUN MTU' "$WG_MTU"
-    prompt_value SERVER_ENDPOINT '服务器公网 IP 或域名' "${SERVER_ENDPOINT:-请填写}"
+    prompt_value SERVER_ENDPOINT '客户端连接入口 IP/域名（NAT 填外部连接 IP，不要填落地出口 IP）' "${SERVER_ENDPOINT:-请填写}"
     prompt_value CLIENT_NAME '客户端名称' "$CLIENT_NAME"
     valid_port "$WG_PORT" || die "WireGuard 端口无效。"
     valid_ipv4_cidr "$WG_SERVER_ADDRESS" || die "服务端地址必须是合法 IPv4 CIDR。"
     valid_ipv4_cidr "$WG_CLIENT_ADDRESS" || die "客户端地址必须是合法 IPv4 CIDR。"
     valid_ipv4 "$WG_CLIENT_DNS" || die "v1 客户端 DNS 仅接受 IPv4 地址。"
     valid_mtu "$WG_MTU" || die "MTU 必须在 1280 到 9000 之间。"
-    [[ $SERVER_ENDPOINT =~ ^[A-Za-z0-9._:-]+$ && $SERVER_ENDPOINT != 请填写 ]] || die "公网地址格式无效。"
+    [[ $SERVER_ENDPOINT != 请填写 ]] && valid_endpoint_host "$SERVER_ENDPOINT" || \
+        die "客户端入口格式无效；只填写 IP/域名，不要附加端口。"
+    [[ $PUBLIC_INTERFACE =~ ^[A-Za-z0-9_.:-]{1,15}$ && $PUBLIC_INTERFACE != 请填写 ]] || die "公网网卡名称无效。"
     CLIENT_NAME=$(sanitize_label "$CLIENT_NAME")
     WG_PORT=$((10#$WG_PORT))
     WG_MTU=$((10#$WG_MTU))

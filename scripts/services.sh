@@ -91,12 +91,22 @@ install_services() {
         install_openrc_services
     fi
     service_do enable ping-wireguard-wg
-    service_do enable ping-wireguard-singbox
+    if using_external_node; then
+        service_do enable ping-wireguard-singbox
+    else
+        service_do disable ping-wireguard-singbox
+    fi
 }
 
 start_services() {
     service_restart ping-wireguard-wg
-    service_restart ping-wireguard-singbox
+    if using_external_node; then
+        service_do enable ping-wireguard-singbox
+        service_restart ping-wireguard-singbox
+    else
+        service_do stop ping-wireguard-singbox 2>/dev/null || true
+        service_do disable ping-wireguard-singbox 2>/dev/null || true
+    fi
 }
 
 stop_services() {

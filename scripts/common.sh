@@ -7,7 +7,7 @@ fi
 readonly PING_WG_COMMON_LOADED=1
 
 readonly PROJECT_NAME="Ping-WireGuard"
-readonly PROJECT_VERSION="1.2.0"
+readonly PROJECT_VERSION="1.3.0"
 
 PING_WG_LIB_DIR="${PING_WG_LIB_DIR:-/usr/local/lib/ping-wireguard}"
 PING_WG_CONFIG_DIR="${PING_WG_CONFIG_DIR:-/etc/ping-wireguard}"
@@ -93,6 +93,8 @@ load_settings() {
     # 此文件只允许 root 写入，变量值均由本项目校验后生成。
     # shellcheck disable=SC1090
     . "$PING_WG_SETTINGS_FILE"
+    # 兼容 v1.2 及更早版本的 settings.conf。
+    PUBLIC_INTERFACE=${PUBLIC_INTERFACE:-}
 }
 
 service_do() {
@@ -139,6 +141,53 @@ valid_ipv4_cidr() {
     [[ $1 == */* ]] && valid_ipv4 "$ip" && is_uint "$prefix" && (( 10#$prefix <= 32 ))
 }
 
+valid_endpoint_host() {
+    local host=$1
+    valid_ipv4 "$host" && return 0
+    [[ $host =~ ^[A-Za-z0-9._-]+$ ]] && return 0
+    # v1 接受不带方括号和端口的原始 IPv6；方括号由配置生成器补上。
+    [[ $host == *:* && $host != *.* && $host =~ ^[0-9A-Fa-f:]+$ ]]
+}
+
+is_non_public_ipv4() {
+    local ip=$1 a b
+    valid_ipv4 "$ip" || return 0
+    IFS=. read -r a b _ _ <<< "$ip"
+    (( 10#$a == 0 || 10#$a == 10 || 10#$a == 127 )) && return 0
+    (( 10#$a == 169 && 10#$b == 254 )) && return 0
+    (( 10#$a == 172 && 10#$b >= 16 && 10#$b <= 31 )) && return 0
+    (( 10#$a == 192 && 10#$b == 168 )) && return 0
+    (( 10#$a == 100 && 10#$b >= 64 && 10#$b <= 127 )) && return 0
+    (( 10#$a >= 224 )) && return 0
+    return 1
+}
+
+ipv4_network_cidr() {
+    local cidr=$1 ip=${1%/*} prefix=${1#*/} a b c d value mask network
+    valid_ipv4_cidr "$cidr" || return 1
+    IFS=. read -r a b c d <<< "$ip"
+    value=$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))
+    if (( 10#$prefix == 0 )); then
+        mask=0
+    else
+        mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF ))
+    fi
+    network=$(( value & mask ))
+    printf '%d.%d.%d.%d/%d' \
+        "$(( (network >> 24) & 255 ))" "$(( (network >> 16) & 255 ))" \
+        "$(( (network >> 8) & 255 ))" "$(( network & 255 ))" "$((10#$prefix))"
+}
+
+current_node_setting() {
+    local id
+    [[ -r $PING_WG_CURRENT_FILE ]] || return 1
+    IFS= read -r id < "$PING_WG_CURRENT_FILE"
+    [[ $id =~ ^[A-Za-z0-9._-]+$ && -r ${PING_WG_NODES_DIR}/${id}.json ]] || return 1
+    printf '%s' "$id"
+}
+
+using_external_node() { current_node_setting >/dev/null 2>&1; }
+
 sanitize_label() {
     local value=$1
     value=${value//$'\r'/ }
@@ -173,6 +222,7 @@ write_settings() {
         printf 'WG_CLIENT_DNS=%q\n' "$WG_CLIENT_DNS"
         printf 'WG_MTU=%q\n' "$WG_MTU"
         printf 'SERVER_ENDPOINT=%q\n' "$SERVER_ENDPOINT"
+        printf 'PUBLIC_INTERFACE=%q\n' "$PUBLIC_INTERFACE"
         printf 'CLIENT_NAME=%q\n' "$CLIENT_NAME"
         printf 'TUN_INTERFACE=%q\n' "$TUN_INTERFACE"
         printf 'TUN_ADDRESS=%q\n' "$TUN_ADDRESS"
@@ -189,6 +239,7 @@ default_settings() {
     WG_CLIENT_DNS=1.1.1.1
     WG_MTU=1380
     SERVER_ENDPOINT=''
+    PUBLIC_INTERFACE=''
     CLIENT_NAME=client
     TUN_INTERFACE=pingtun0
     TUN_ADDRESS=172.19.0.1/30

@@ -12,21 +12,27 @@ format_endpoint() {
 
 ensure_wg_keys() {
     local server_key=${PING_WG_CONFIG_DIR}/server.key client_key=${PING_WG_CONFIG_DIR}/client.key
+    local preshared_key=${PING_WG_CONFIG_DIR}/client.psk
     umask 077
     [[ -s $server_key ]] || wg genkey > "$server_key"
     [[ -s $client_key ]] || wg genkey > "$client_key"
-    chmod 0600 "$server_key" "$client_key"
+    [[ -s $preshared_key ]] || wg genpsk > "$preshared_key"
+    chmod 0600 "$server_key" "$client_key" "$preshared_key"
     wg pubkey < "$server_key" > "${PING_WG_CONFIG_DIR}/server.pub"
     wg pubkey < "$client_key" > "${PING_WG_CONFIG_DIR}/client.pub"
     chmod 0600 "${PING_WG_CONFIG_DIR}/server.pub" "${PING_WG_CONFIG_DIR}/client.pub"
 }
 
 generate_wg_config() {
-    local server_private server_public client_private client_public endpoint tmp
+    local server_private server_public client_private client_public client_psk endpoint tmp
     load_settings || { log_error "尚未完成基础配置。"; return 1; }
     [[ -n $SERVER_ENDPOINT ]] || { log_error "服务器公网地址不能为空。"; return 1; }
     ensure_directories
-    install -d -m 0700 "$(dirname "$PING_WG_WG_CONFIG")"
+    if [[ ${PING_WG_TEST_MODE:-0} == 1 ]]; then
+        mkdir -p "$(dirname "$PING_WG_WG_CONFIG")"
+    else
+        install -d -m 0700 "$(dirname "$PING_WG_WG_CONFIG")"
+    fi
     if [[ -s $PING_WG_WG_CONFIG ]] && ! grep -q '^# Managed by Ping-WireGuard$' "$PING_WG_WG_CONFIG"; then
         if command_exists ip && ip link show "$WG_INTERFACE" >/dev/null 2>&1; then
             log_error "检测到既有 ${WG_INTERFACE} 接口正在运行，为避免中断现有 WireGuard 业务，安装已停止。"
@@ -41,6 +47,7 @@ generate_wg_config() {
     server_public=$(<"${PING_WG_CONFIG_DIR}/server.pub")
     client_private=$(<"${PING_WG_CONFIG_DIR}/client.key")
     client_public=$(<"${PING_WG_CONFIG_DIR}/client.pub")
+    client_psk=$(<"${PING_WG_CONFIG_DIR}/client.psk")
     endpoint=$(format_endpoint "$SERVER_ENDPOINT")
 
     tmp=$(mktemp "$(dirname "$PING_WG_WG_CONFIG")/.wg0.XXXXXX") || return 1
@@ -50,7 +57,8 @@ generate_wg_config() {
             "$WG_SERVER_ADDRESS" "$WG_PORT" "$server_private" "$WG_MTU"
         printf 'PostUp = %s/scripts/firewall.sh up\n' "$PING_WG_LIB_DIR"
         printf 'PostDown = %s/scripts/firewall.sh down\n\n' "$PING_WG_LIB_DIR"
-        printf '# %s\n[Peer]\nPublicKey = %s\nAllowedIPs = %s\n' "$CLIENT_NAME" "$client_public" "$WG_CLIENT_ADDRESS"
+        printf '# %s\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s\n' \
+            "$CLIENT_NAME" "$client_public" "$client_psk" "$WG_CLIENT_ADDRESS"
     } > "$tmp"
     chmod 0600 "$tmp"
     mv -f "$tmp" "$PING_WG_WG_CONFIG"
@@ -59,8 +67,8 @@ generate_wg_config() {
     {
         printf '[Interface]\nPrivateKey = %s\nAddress = %s\nDNS = %s\nMTU = %s\n\n' \
             "$client_private" "$WG_CLIENT_ADDRESS" "$WG_CLIENT_DNS" "$WG_MTU"
-        printf '[Peer]\nPublicKey = %s\nEndpoint = %s:%s\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25\n' \
-            "$server_public" "$endpoint" "$WG_PORT"
+        printf '[Peer]\nPublicKey = %s\nPresharedKey = %s\nEndpoint = %s:%s\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25\n' \
+            "$server_public" "$client_psk" "$endpoint" "$WG_PORT"
     } > "$tmp"
     chmod 0600 "$tmp"
     mv -f "$tmp" "$PING_WG_CLIENT_CONFIG"

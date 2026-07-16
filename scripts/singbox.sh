@@ -14,11 +14,7 @@ singbox_binary() {
 }
 
 current_node_id() {
-    [[ -r $PING_WG_CURRENT_FILE ]] || return 1
-    local id
-    IFS= read -r id < "$PING_WG_CURRENT_FILE"
-    [[ $id =~ ^[A-Za-z0-9._-]+$ && -r ${PING_WG_NODES_DIR}/${id}.json ]] || return 1
-    printf '%s' "$id"
+    current_node_setting
 }
 
 node_record() {
@@ -115,6 +111,25 @@ write_current_node_id() {
     mv -f "$tmp" "$PING_WG_CURRENT_FILE"
 }
 
+refresh_project_firewall() {
+    local script=${PING_WG_LIB_DIR}/scripts/firewall.sh
+    [[ -r $script ]] || { log_error "缺少防火墙脚本：$script"; return 1; }
+    bash "$script" down || return 1
+    bash "$script" up
+}
+
+activate_external_runtime() {
+    service_do enable ping-wireguard-singbox || return 1
+    service_restart ping-wireguard-singbox || return 1
+    refresh_project_firewall
+}
+
+activate_direct_runtime() {
+    refresh_project_firewall || return 1
+    service_do stop ping-wireguard-singbox 2>/dev/null || true
+    service_do disable ping-wireguard-singbox 2>/dev/null || true
+}
+
 set_direct_outbound() {
     local old=''
     old=$(current_node_id 2>/dev/null || true)
@@ -124,17 +139,17 @@ set_direct_outbound() {
         if [[ -n $old ]]; then generate_singbox_config "$old"; else generate_singbox_config direct; fi
         return 1
     fi
-    if service_restart ping-wireguard-singbox; then
+    if activate_direct_runtime; then
         log_ok "已切换为本机直连出口。"
         return 0
     fi
-    log_error "服务重启失败，正在回滚出口选择。"
+    log_error "出口运行时切换失败，正在回滚出口选择。"
     if [[ -n $old ]]; then
         generate_singbox_config "$old" && write_current_node_id "$old"
     else
         generate_singbox_config direct
     fi
-    service_restart ping-wireguard-singbox 2>/dev/null || true
+    if [[ -n $old ]]; then activate_external_runtime 2>/dev/null || true; else activate_direct_runtime 2>/dev/null || true; fi
     return 1
 }
 
@@ -148,18 +163,18 @@ set_current_node() {
         if [[ -n $old ]]; then generate_singbox_config "$old"; else generate_singbox_config direct; fi
         return 1
     fi
-    if service_restart ping-wireguard-singbox; then
+    if activate_external_runtime; then
         log_ok "已切换出站节点。"
         return 0
     fi
-    log_error "服务重启失败，正在回滚节点选择。"
+    log_error "出口运行时切换失败，正在回滚节点选择。"
     if [[ -n $old ]]; then
         generate_singbox_config "$old" && write_current_node_id "$old"
     else
         rm -f "$PING_WG_CURRENT_FILE"
         generate_singbox_config
     fi
-    service_restart ping-wireguard-singbox 2>/dev/null || true
+    if [[ -n $old ]]; then activate_external_runtime 2>/dev/null || true; else activate_direct_runtime 2>/dev/null || true; fi
     return 1
 }
 
@@ -185,7 +200,7 @@ show_current_node() {
     local id record type name server port
     id=$(current_node_id 2>/dev/null || true)
     if [[ -z $id ]]; then
-        printf '当前出口：本机直连\n线路：WireGuard → sing-box TUN → 服务器公网\n'
+        printf '当前出口：本机直连\n线路：WireGuard → 内核转发 / MASQUERADE → 服务器公网\n'
         return 0
     fi
     record=$(node_record "$id") || return 1
