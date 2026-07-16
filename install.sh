@@ -84,6 +84,10 @@ bootstrap_full_project() {
     exit "$status"
 }
 
+# `curl ... | bash` 从标准输入执行时 BASH_SOURCE 为空，必须直接进入自举，
+# 不能误把当前工作目录中的同名 scripts/ 当作已下载的项目。
+[[ -n ${BASH_SOURCE[0]:-} ]] || bootstrap_full_project "$@"
+
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SOURCE_SCRIPTS="${ROOT_DIR}/scripts"
 
@@ -298,6 +302,6 @@ perform_install() {
     fi
 }
 
-if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+if [[ ${BASH_SOURCE[0]:-} == "$0" ]]; then
     perform_install "$@"
 fi

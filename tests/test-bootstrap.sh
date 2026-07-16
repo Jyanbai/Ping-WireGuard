@@ -27,4 +27,13 @@ output=$(PING_WG_BOOTSTRAP_ONLY=1 \
     exit 1
 }
 
+pipe_output=$(PING_WG_BOOTSTRAP_ONLY=1 \
+    PING_WG_ARCHIVE_URL="${TEST_TMP}/project.tar.gz" \
+    bash < "${TEST_TMP}/standalone-install.sh")
+
+[[ $pipe_output == *BOOTSTRAP_OK* ]] || {
+    printf 'FAIL: install.sh 标准输入自举测试失败\n%s\n' "$pipe_output" >&2
+    exit 1
+}
+
 printf 'PASS: install.sh 单文件自举测试通过\n'
