@@ -3,6 +3,23 @@
     "level": "info",
     "timestamp": true
   },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "bootstrap-dns"
+      },
+      {
+        "type": "tcp",
+        "tag": "proxy-dns",
+        "server": "1.1.1.1",
+        "server_port": 53,
+        "detour": "proxy"
+      }
+    ],
+    "final": "proxy-dns",
+    "strategy": "prefer_ipv4"
+  },
   "inbounds": [
     {
       "type": "tun",
@@ -14,6 +31,8 @@
       "auto_redirect": true,
       "strict_route": true,
       "stack": "system",
+      "iproute2_table_index": __TUN_TABLE_INDEX__,
+      "iproute2_rule_index": __TUN_RULE_INDEX__,
       "include_interface": ["__WG_INTERFACE__"]
     }
   ],
@@ -21,8 +40,14 @@
     __OUTBOUND__
   ],
   "route": {
-    "auto_detect_interface": true,
+    "rules": [
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      }
+    ],
+    "default_interface": "__PUBLIC_INTERFACE__",
+    "default_domain_resolver": "bootstrap-dns",
     "final": "proxy"
   }
 }
-

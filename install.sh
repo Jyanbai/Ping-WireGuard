@@ -212,15 +212,19 @@ install_singbox_release() {
 }
 
 install_singbox() {
-    local current='' installer
+    local current='' installer minimum=1.13.0
     if command_exists sing-box; then
         current=$(sing-box version 2>/dev/null | awk 'NR==1 {print $3}')
-        version_ge "${current:-0}" 1.10.0 && { log_ok "sing-box ${current} 已安装。"; return 0; }
+        version_ge "${current:-0}" "$minimum" && { log_ok "sing-box ${current} 已安装。"; return 0; }
         log_warn "sing-box ${current:-未知} 过旧，将升级到当前稳定版。"
     fi
     log_info "安装 sing-box..."
     if [[ $OS_FAMILY == alpine ]] && apk add --no-cache sing-box; then
-        :
+        current=$(sing-box version 2>/dev/null | awk 'NR==1 {print $3}')
+        if ! version_ge "${current:-0}" "$minimum"; then
+            log_warn "Alpine 软件仓库中的 sing-box ${current:-未知} 过旧，改用官方发布版。"
+            install_singbox_release
+        fi
     elif [[ $OS_FAMILY != alpine ]]; then
         installer=$(mktemp)
         curl -fL --retry 3 --connect-timeout 10 https://sing-box.app/install.sh -o "$installer"
@@ -229,9 +233,10 @@ install_singbox() {
     else
         install_singbox_release
     fi
+    hash -r 2>/dev/null || true
     command_exists sing-box || die "sing-box 安装失败。"
     current=$(sing-box version 2>/dev/null | awk 'NR==1 {print $3}')
-    version_ge "${current:-0}" 1.10.0 || die "sing-box ${current:-未知} 低于最低要求 1.10.0。"
+    version_ge "${current:-0}" "$minimum" || die "sing-box ${current:-未知} 低于最低要求 ${minimum}。"
 }
 
 install_project_files() {
@@ -274,6 +279,24 @@ prompt_value() {
     printf -v "$var_name" '%s' "${value:-$current}"
 }
 
+prepare_tun_address() {
+    local conflict='' selected=''
+    valid_ipv4_cidr "$TUN_ADDRESS" || die "TUN 地址必须是合法 IPv4 CIDR。"
+    if [[ $TUN_ADDRESS == 172.19.0.1/30 ]]; then
+        log_warn "检测到旧版默认 TUN 网段，正在迁移以避开常见 Docker 网桥。"
+        TUN_ADDRESS=198.18.0.1/30
+    fi
+    conflict=$(find_tun_address_conflict "$TUN_ADDRESS" || true)
+    if [[ -n $conflict ]]; then
+        selected=$(choose_available_tun_address || true)
+        [[ -n $selected ]] || die "TUN 地址 ${TUN_ADDRESS} 与${conflict}冲突，且没有可用备用网段。"
+        log_warn "TUN 地址 ${TUN_ADDRESS} 与${conflict}冲突，已改用 ${selected}。"
+        TUN_ADDRESS=$selected
+    fi
+    is_uint "$TUN_TABLE_INDEX" && (( 10#$TUN_TABLE_INDEX >= 1 )) || die "TUN 路由表索引无效。"
+    is_uint "$TUN_RULE_INDEX" && (( 10#$TUN_RULE_INDEX >= 1 )) || die "TUN 规则索引无效。"
+}
+
 collect_settings() {
     local primary_ipv4='' egress_ipv4=''
     primary_ipv4=$(detect_primary_ipv4 || true)
@@ -286,6 +309,7 @@ collect_settings() {
     else
         [[ -n $PUBLIC_INTERFACE ]] || PUBLIC_INTERFACE=$(detect_default_interface || true)
     fi
+    prepare_tun_address
     egress_ipv4=$(detect_egress_ipv4 || true)
     if [[ ! -t 0 ]]; then
         [[ -n $SERVER_ENDPOINT ]] || die "非交互安装请先通过已有 settings.conf 提供 SERVER_ENDPOINT。"

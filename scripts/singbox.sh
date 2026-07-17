@@ -49,13 +49,16 @@ render_template() {
     [[ -r $template ]] || { log_error "缺少 sing-box 模板：$template"; return 1; }
     : > "$target"
     while IFS= read -r line || [[ -n $line ]]; do
-        for marker in __TUN_INTERFACE__ __TUN_ADDRESS__ __MTU__ __WG_INTERFACE__ __OUTBOUND__; do
+        for marker in __TUN_INTERFACE__ __TUN_ADDRESS__ __MTU__ __WG_INTERFACE__ __PUBLIC_INTERFACE__ __TUN_TABLE_INDEX__ __TUN_RULE_INDEX__ __OUTBOUND__; do
             [[ $line == *"$marker"* ]] || continue
             case "$marker" in
                 __TUN_INTERFACE__) value=$TUN_INTERFACE ;;
                 __TUN_ADDRESS__) value=$TUN_ADDRESS ;;
                 __MTU__) value=$WG_MTU ;;
                 __WG_INTERFACE__) value=$WG_INTERFACE ;;
+                __PUBLIC_INTERFACE__) value=$PUBLIC_INTERFACE ;;
+                __TUN_TABLE_INDEX__) value=$TUN_TABLE_INDEX ;;
+                __TUN_RULE_INDEX__) value=$TUN_RULE_INDEX ;;
                 __OUTBOUND__) value=$outbound ;;
             esac
             prefix=${line%%"$marker"*}; suffix=${line#*"$marker"}
@@ -66,8 +69,10 @@ render_template() {
 }
 
 generate_singbox_config() {
-    local node_id=${1:-} outbound tmp sb
+    local node_id=${1:-} outbound tmp sb conflict
     load_settings || { log_error "尚未完成基础配置。"; return 1; }
+    conflict=$(find_tun_address_conflict "$TUN_ADDRESS" || true)
+    [[ -z $conflict ]] || { log_error "TUN 地址 ${TUN_ADDRESS} 与${conflict}冲突，请先执行重新配置。"; return 1; }
     ensure_directories
     if [[ -z $node_id ]]; then node_id=$(current_node_id 2>/dev/null || printf 'direct'); fi
     if [[ $node_id == direct ]]; then
@@ -103,6 +108,38 @@ generate_singbox_config() {
     mv -f "$tmp" "$PING_WG_SB_CONFIG"
 }
 
+verify_tun_runtime() {
+    local attempt
+    [[ ${PING_WG_TEST_MODE:-0} == 1 ]] && return 0
+    command_exists ip || { log_error "缺少 iproute2，无法验证 TUN 运行状态。"; return 1; }
+    for ((attempt=1; attempt<=20; attempt++)); do
+        if ip link show dev "$TUN_INTERFACE" >/dev/null 2>&1 &&
+           [[ -n $(ip -4 route show table "$TUN_TABLE_INDEX" 2>/dev/null) ]] &&
+           ip -4 rule show 2>/dev/null | grep -Eq "(^|[[:space:]])(lookup|table)[[:space:]]+${TUN_TABLE_INDEX}([[:space:]]|$)"; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    log_error "sing-box 进程已启动，但 TUN 接口或策略路由未就绪。"
+    return 1
+}
+
+show_tun_runtime_status() {
+    local interface_state='缺失' route_state='缺失' rule_state='缺失' guard_state='缺失'
+    command_exists ip && ip link show dev "$TUN_INTERFACE" >/dev/null 2>&1 && interface_state='正常'
+    command_exists ip && [[ -n $(ip -4 route show table "$TUN_TABLE_INDEX" 2>/dev/null) ]] && route_state='正常'
+    if command_exists ip && ip -4 rule show 2>/dev/null | grep -Eq "(^|[[:space:]])(lookup|table)[[:space:]]+${TUN_TABLE_INDEX}([[:space:]]|$)"; then
+        rule_state='正常'
+    fi
+    if command_exists iptables && iptables -t filter -C FORWARD -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT 2>/dev/null; then
+        guard_state='正常'
+    elif command_exists nft && nft list table ip ping_wireguard 2>/dev/null | grep -q 'Ping-WireGuard proxy guard'; then
+        guard_state='正常'
+    fi
+    printf 'TUN 接口：%s（%s，MTU %s）\n策略路由表 %s：%s\n策略规则：%s\n出口绑定：%s\n防直连保护：%s\n' \
+        "$interface_state" "$TUN_ADDRESS" "$WG_MTU" "$TUN_TABLE_INDEX" "$route_state" "$rule_state" "$PUBLIC_INTERFACE" "$guard_state"
+}
+
 write_current_node_id() {
     local node_id=$1 tmp
     tmp=$(mktemp "${PING_WG_CONFIG_DIR}/.current.XXXXXX") || return 1
@@ -119,9 +156,11 @@ refresh_project_firewall() {
 }
 
 activate_external_runtime() {
+    # current-node 已原子写入；先切换为 fail-closed 防火墙，再启动 TUN，避免切换窗口旁路。
+    refresh_project_firewall || return 1
     service_do enable ping-wireguard-singbox || return 1
     service_restart ping-wireguard-singbox || return 1
-    refresh_project_firewall
+    verify_tun_runtime
 }
 
 activate_direct_runtime() {

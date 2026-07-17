@@ -6,9 +6,13 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 . "${SCRIPT_DIR}/common.sh"
 
 firewall_up_nft() {
-    local subnet nat_rule=''
+    local subnet nat_rule='' guard_rule=''
     subnet=$(ipv4_network_cidr "$WG_SERVER_ADDRESS") || return 1
-    using_external_node || nat_rule="ip saddr ${subnet} oifname \"${PUBLIC_INTERFACE}\" masquerade comment \"Ping-WireGuard direct\""
+    if using_external_node; then
+        guard_rule="iifname \"${WG_INTERFACE}\" oifname \"${PUBLIC_INTERFACE}\" reject comment \"Ping-WireGuard proxy guard\""
+    else
+        nat_rule="ip saddr ${subnet} oifname \"${PUBLIC_INTERFACE}\" masquerade comment \"Ping-WireGuard direct\""
+    fi
     nft delete table inet ping_wireguard 2>/dev/null || true
     nft delete table ip ping_wireguard 2>/dev/null || true
     nft -f - <<EOF
@@ -19,6 +23,7 @@ table ip ping_wireguard {
   }
   chain forward {
     type filter hook forward priority -50; policy accept;
+    ${guard_rule}
     iifname "${WG_INTERFACE}" accept comment "Ping-WireGuard clients"
     oifname "${WG_INTERFACE}" ct state established,related accept comment "Ping-WireGuard return"
   }
@@ -48,7 +53,11 @@ firewall_up_iptables() {
     iptables_add filter INPUT -p udp --dport "$WG_PORT" -m comment --comment Ping-WireGuard -j ACCEPT
     iptables_add filter FORWARD -i "$WG_INTERFACE" -m comment --comment Ping-WireGuard -j ACCEPT
     iptables_add filter FORWARD -o "$WG_INTERFACE" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment Ping-WireGuard -j ACCEPT
-    if ! using_external_node; then
+    iptables_del filter FORWARD -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT
+    if using_external_node; then
+        iptables_del nat POSTROUTING -s "$subnet" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-direct -j MASQUERADE
+        iptables_add filter FORWARD -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT
+    else
         iptables_add nat POSTROUTING -s "$subnet" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-direct -j MASQUERADE
     fi
 }
@@ -59,6 +68,7 @@ firewall_down_iptables() {
     iptables_del filter INPUT -p udp --dport "$WG_PORT" -m comment --comment Ping-WireGuard -j ACCEPT
     iptables_del filter FORWARD -i "$WG_INTERFACE" -m comment --comment Ping-WireGuard -j ACCEPT
     iptables_del filter FORWARD -o "$WG_INTERFACE" -m conntrack --ctstate RELATED,ESTABLISHED -m comment --comment Ping-WireGuard -j ACCEPT
+    iptables_del filter FORWARD -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT
     iptables_del nat POSTROUTING -s "$subnet" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-direct -j MASQUERADE
 }
 
@@ -70,7 +80,12 @@ firewall_up_firewalld() {
     firewall-cmd --permanent --zone=public --add-interface="$WG_INTERFACE" >/dev/null
     firewall-cmd --zone=public --add-port="${WG_PORT}/udp" >/dev/null
     firewall-cmd --permanent --zone=public --add-port="${WG_PORT}/udp" >/dev/null
-    if ! using_external_node; then
+    firewall-cmd --direct --remove-rule ipv4 filter FORWARD 0 -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT >/dev/null 2>&1 || true
+    firewall-cmd --permanent --direct --remove-rule ipv4 filter FORWARD 0 -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT >/dev/null 2>&1 || true
+    if using_external_node; then
+        firewall-cmd --direct --add-rule ipv4 filter FORWARD 0 -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT >/dev/null
+        firewall-cmd --permanent --direct --add-rule ipv4 filter FORWARD 0 -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT >/dev/null
+    else
         firewall-cmd --zone=public --add-rich-rule="$rich" >/dev/null
         firewall-cmd --permanent --zone=public --add-rich-rule="$rich" >/dev/null
     fi
@@ -88,6 +103,8 @@ firewall_down_firewalld() {
     firewall-cmd --permanent --zone=public --remove-port="${WG_PORT}/udp" >/dev/null 2>&1 || true
     firewall-cmd --zone=public --remove-rich-rule="$rich" >/dev/null 2>&1 || true
     firewall-cmd --permanent --zone=public --remove-rich-rule="$rich" >/dev/null 2>&1 || true
+    firewall-cmd --direct --remove-rule ipv4 filter FORWARD 0 -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT >/dev/null 2>&1 || true
+    firewall-cmd --permanent --direct --remove-rule ipv4 filter FORWARD 0 -i "$WG_INTERFACE" -o "$PUBLIC_INTERFACE" -m comment --comment Ping-WireGuard-proxy-guard -j REJECT >/dev/null 2>&1 || true
 }
 
 firewall_up() {

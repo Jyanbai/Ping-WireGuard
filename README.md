@@ -17,10 +17,12 @@ sing-box TUN 使用以下关键项：
 - `include_interface: ["wg0"]`：不接管宿主机其他业务流量。
 - `auto_route` + `auto_redirect`：让 TUN 作为 WireGuard 客户端流量的网关。
 - `strict_route`：避免不支持的流量静默绕过。
-- `route.auto_detect_interface`：避免 sing-box 外部节点连接再次进入 TUN 形成回环。
+- `route.default_interface`：明确绑定安装时确认的公网网卡，避免多网卡/策略路由环境误判及 TUN 回环。
+- `bootstrap-dns` 只解析外部节点域名；WireGuard 客户端 DNS 会被劫持并通过当前外部节点执行 TCP 查询。
+- 固定的 iproute2 表/规则索引便于诊断；安装器会检测 TUN 网段与 WireGuard、Docker 或现有系统路由是否冲突。
 - 默认 MTU 为 `1380`，WireGuard 与 TUN 保持一致，可在“重新配置”中调整。
 
-本机直连模式不依赖 sing-box，sing-box 服务显示 `inactive` 属于正常状态。只有选择外部节点后才启用 sing-box，并自动撤掉直连 MASQUERADE，避免流量旁路。
+本机直连模式不依赖 sing-box，sing-box 服务显示 `inactive` 属于正常状态。只有选择外部节点后才启用 sing-box，并自动撤掉直连 MASQUERADE；同时添加 wg0 到公网网卡的 REJECT 防直连规则，TUN 或策略路由异常时不会静默退回服务器直连出口。
 
 ## 支持环境
 
@@ -53,7 +55,7 @@ sudo ./install.sh
 安装器会：
 
 1. 按发行版安装 WireGuard、curl、iproute2、nftables/iptables，以及可选二维码工具 qrencode 等依赖。
-2. 安装或升级到兼容的 sing-box 稳定版（要求 1.10+）。
+2. 安装或升级到兼容的 sing-box 稳定版（要求 1.13+；Alpine 仓库版本过旧时自动回退官方二进制）。
 3. 把管理文件安装到 `/usr/local/lib/ping-wireguard/`，把入口安装为 `/usr/local/bin/ping-wg`。
 4. 交互式确认客户端连接入口、UDP 映射端口和公网网卡，生成带预共享密钥的服务端与首个客户端配置。
 5. 启用 IP 转发、防火墙规则、systemd/OpenRC 自启动和 sing-box 崩溃自动重启。
@@ -166,7 +168,7 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
 - 无凭据索引：`/etc/ping-wireguard/nodes.tsv`
 - 当前外部节点 ID：`/etc/ping-wireguard/current-node`（文件不存在表示本机直连）
 
-目录和凭据文件只允许 root 访问。切换时会先渲染临时配置并执行 `sing-box check`，校验成功才原子替换正式配置；服务重启失败时会尝试回滚原节点。
+目录和凭据文件只允许 root 访问。切换时会先渲染临时配置并执行 `sing-box check`，校验成功才原子替换正式配置；服务启动后还会检查 TUN 接口与策略路由，任一环节失败都会尝试回滚原节点。
 
 默认通过内核转发和 MASQUERADE 从服务器公网直接落地，不运行 sing-box。导入 VLESS/SS 后可从菜单切换为外部代理出口，也可随时切回“本机直连”；切换过程中会同步更新 sing-box 自启动状态和防火墙规则，失败时尝试回滚原出口。
 
@@ -176,16 +178,26 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
 
 ```json
 {
+  "dns": {
+    "servers": [
+      { "type": "local", "tag": "bootstrap-dns" },
+      { "type": "tcp", "tag": "proxy-dns", "server": "1.1.1.1", "server_port": 53, "detour": "proxy" }
+    ],
+    "final": "proxy-dns",
+    "strategy": "prefer_ipv4"
+  },
   "inbounds": [
     {
       "type": "tun",
       "tag": "wg-tun-in",
       "interface_name": "pingtun0",
-      "address": ["172.19.0.1/30"],
+      "address": ["198.18.0.1/30"],
       "mtu": 1380,
       "auto_route": true,
       "auto_redirect": true,
       "strict_route": true,
+      "iproute2_table_index": 20220,
+      "iproute2_rule_index": 9200,
       "include_interface": ["wg0"]
     }
   ],
@@ -193,7 +205,9 @@ v1 给 WireGuard 客户端分配 IPv4 地址，客户端配置只宣告 `0.0.0.0
     "由 import-node.sh 生成的当前外部节点 outbound"
   ],
   "route": {
-    "auto_detect_interface": true,
+    "rules": [{ "protocol": "dns", "action": "hijack-dns" }],
+    "default_interface": "eth0",
+    "default_domain_resolver": "bootstrap-dns",
     "final": "proxy"
   }
 }

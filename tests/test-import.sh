@@ -31,6 +31,8 @@ assert_eq() { [[ $1 == "$2" ]] || fail "期望 [$2]，实际 [$1]"; }
 assert_has() { [[ $1 == *"$2"* ]] || fail "缺少片段 [$2]：$1"; }
 
 assert_eq "$(ipv4_network_cidr 10.66.66.1/24)" '10.66.66.0/24'
+cidr_overlaps 198.18.0.1/30 198.18.0.0/24 || fail '未识别重叠的 TUN 网段'
+if cidr_overlaps 198.18.0.1/30 10.66.66.0/24; then fail '误判不重叠的 TUN 网段'; fi
 is_non_public_ipv4 192.168.50.10 || fail '未识别 RFC1918 私网地址'
 if is_non_public_ipv4 203.0.113.10; then fail '误把公网格式地址识别为非公网'; fi
 valid_endpoint_host 203.0.113.10 || fail '公网 IPv4 Endpoint 被拒绝'
@@ -70,12 +72,21 @@ assert_eq "$PARSED_PORT" 443
 ensure_directories
 default_settings
 SERVER_ENDPOINT=203.0.113.1
+PUBLIC_INTERFACE=eth0
 write_settings
 parse_node_uri 'vless://33333333-3333-4333-8333-333333333333@node.example:443?security=tls&sni=node.example&type=ws&path=%2Fproxy#Current'
 node_id=$(store_parsed_node 'test-uri')
 generate_singbox_config "$node_id"
 grep -q '"include_interface": \["wg0"\]' "$PING_WG_SB_CONFIG" || fail '模板未限制 wg0'
 grep -q '"final": "proxy"' "$PING_WG_SB_CONFIG" || fail '模板 final 不正确'
+grep -q '"default_interface": "eth0"' "$PING_WG_SB_CONFIG" || fail '模板未绑定公网出口接口'
+grep -q '"default_domain_resolver": "bootstrap-dns"' "$PING_WG_SB_CONFIG" || fail '外部节点域名没有 bootstrap DNS'
+grep -q '"detour": "proxy"' "$PING_WG_SB_CONFIG" || fail '客户端 DNS 未通过代理出口'
+grep -q '"strategy": "prefer_ipv4"' "$PING_WG_SB_CONFIG" || fail 'DNS 未保留 IPv6 节点域名回退能力'
+grep -q '"action": "hijack-dns"' "$PING_WG_SB_CONFIG" || fail '客户端 DNS 未启用劫持处理'
+grep -q '"iproute2_table_index": 20220' "$PING_WG_SB_CONFIG" || fail 'TUN 路由表索引不正确'
+grep -q '"iproute2_rule_index": 9200' "$PING_WG_SB_CONFIG" || fail 'TUN 规则索引不正确'
+if grep -q '"auto_detect_interface"' "$PING_WG_SB_CONFIG"; then fail '不应同时启用自动出口探测'; fi
 if grep -q '__[A-Z_]*__' "$PING_WG_SB_CONFIG"; then fail '模板仍有未替换占位符'; fi
 
 if command -v python >/dev/null 2>&1; then

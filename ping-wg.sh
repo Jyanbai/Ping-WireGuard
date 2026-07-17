@@ -55,7 +55,12 @@ action_status() {
     show_current_node
     printf '\n%s服务状态%s\n' "$C_BOLD" "$C_RESET"
     printf 'WireGuard：%s\nsing-box：%s\n' "$(service_state ping-wireguard-wg)" "$(service_state ping-wireguard-singbox)"
-    using_external_node || printf '说明：本机直连模式不需要 sing-box，显示 inactive 属于正常状态。\n'
+    if using_external_node; then
+        printf '\n%sTUN 链式出口%s\n' "$C_BOLD" "$C_RESET"
+        show_tun_runtime_status
+    else
+        printf '说明：本机直连模式不需要 sing-box，显示 inactive 属于正常状态。\n'
+    fi
     if command_exists wg; then
         printf '\n%sWireGuard 运行信息%s\n' "$C_BOLD" "$C_RESET"
         wg show "${WG_INTERFACE:-wg0}" 2>/dev/null || printf '接口尚未启动。\n'

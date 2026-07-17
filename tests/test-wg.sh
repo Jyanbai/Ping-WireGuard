@@ -69,12 +69,34 @@ iptables() {
 firewall_up_iptables
 grep -q -- '-t nat -I POSTROUTING.*-s 10.66.66.0/24.*-o eth0.*MASQUERADE' "$IPTABLES_CAPTURE" || \
     fail '直连模式没有添加限定网段的 MASQUERADE'
+if grep -q -- '-I FORWARD 1.*Ping-WireGuard-proxy-guard.*REJECT' "$IPTABLES_CAPTURE"; then
+    fail '直连模式不应添加代理防直连规则'
+fi
 
 mkdir -p "$PING_WG_NODES_DIR"
 printf '{}\n' > "$PING_WG_NODES_DIR/proxy.json"
 printf 'proxy\n' > "$PING_WG_CURRENT_FILE"
 : > "$IPTABLES_CAPTURE"
 firewall_up_iptables
-if grep -q MASQUERADE "$IPTABLES_CAPTURE"; then fail '外部节点模式不应保留直连 MASQUERADE'; fi
+if grep -q -- '-I POSTROUTING.*MASQUERADE' "$IPTABLES_CAPTURE"; then fail '外部节点模式不应添加直连 MASQUERADE'; fi
+grep -q -- '-I FORWARD 1.*-i wg0.*-o eth0.*Ping-WireGuard-proxy-guard.*REJECT' "$IPTABLES_CAPTURE" || \
+    fail '外部节点模式没有添加防直连规则'
+
+NFT_CAPTURE=$TEST_TMP/nft.rules
+nft() {
+    if [[ ${1:-} == delete ]]; then return 0; fi
+    if [[ ${1:-} == -f && ${2:-} == - ]]; then command cat > "$NFT_CAPTURE"; return 0; fi
+    return 1
+}
+
+rm -f "$PING_WG_CURRENT_FILE"
+firewall_up_nft
+grep -q 'masquerade comment "Ping-WireGuard direct"' "$NFT_CAPTURE" || fail 'nft 直连模式没有 MASQUERADE'
+if grep -q 'Ping-WireGuard proxy guard' "$NFT_CAPTURE"; then fail 'nft 直连模式不应添加防直连规则'; fi
+
+printf 'proxy\n' > "$PING_WG_CURRENT_FILE"
+firewall_up_nft
+grep -q 'reject comment "Ping-WireGuard proxy guard"' "$NFT_CAPTURE" || fail 'nft 外部节点模式没有防直连规则'
+if grep -q 'masquerade comment "Ping-WireGuard direct"' "$NFT_CAPTURE"; then fail 'nft 外部节点模式不应保留 MASQUERADE'; fi
 
 printf 'PASS: WireGuard PSK、Endpoint 与防火墙模式测试通过\n'

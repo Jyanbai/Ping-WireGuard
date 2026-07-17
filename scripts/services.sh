@@ -39,6 +39,8 @@ ExecStartPre=${sb} check -c ${PING_WG_SB_CONFIG}
 ExecStart=${sb} run -c ${PING_WG_SB_CONFIG}
 Restart=on-failure
 RestartSec=3s
+TimeoutStartSec=30s
+TimeoutStopSec=15s
 LimitNOFILE=1048576
 
 [Install]

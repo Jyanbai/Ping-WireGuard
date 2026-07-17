@@ -7,7 +7,7 @@ fi
 readonly PING_WG_COMMON_LOADED=1
 
 readonly PROJECT_NAME="Ping-WireGuard"
-readonly PROJECT_VERSION="1.3.0"
+readonly PROJECT_VERSION="1.3.1"
 
 PING_WG_LIB_DIR="${PING_WG_LIB_DIR:-/usr/local/lib/ping-wireguard}"
 PING_WG_CONFIG_DIR="${PING_WG_CONFIG_DIR:-/etc/ping-wireguard}"
@@ -93,8 +93,12 @@ load_settings() {
     # 此文件只允许 root 写入，变量值均由本项目校验后生成。
     # shellcheck disable=SC1090
     . "$PING_WG_SETTINGS_FILE"
-    # 兼容 v1.2 及更早版本的 settings.conf。
+    # 兼容旧版本的 settings.conf；新增字段使用不易冲突的固定默认值。
     PUBLIC_INTERFACE=${PUBLIC_INTERFACE:-}
+    TUN_INTERFACE=${TUN_INTERFACE:-pingtun0}
+    TUN_ADDRESS=${TUN_ADDRESS:-198.18.0.1/30}
+    TUN_TABLE_INDEX=${TUN_TABLE_INDEX:-20220}
+    TUN_RULE_INDEX=${TUN_RULE_INDEX:-9200}
 }
 
 service_do() {
@@ -178,6 +182,59 @@ ipv4_network_cidr() {
         "$(( (network >> 8) & 255 ))" "$(( network & 255 ))" "$((10#$prefix))"
 }
 
+ipv4_to_uint() {
+    local ip=$1 a b c d
+    valid_ipv4 "$ip" || return 1
+    IFS=. read -r a b c d <<< "$ip"
+    printf '%u' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
+}
+
+cidr_overlaps() {
+    local left=$1 right=$2 left_ip=${1%/*} right_ip=${2%/*}
+    local left_prefix=${1#*/} right_prefix=${2#*/} left_value right_value
+    local left_mask right_mask left_start right_start left_end right_end
+    valid_ipv4_cidr "$left" && valid_ipv4_cidr "$right" || return 2
+    left_value=$(ipv4_to_uint "$left_ip") || return 2
+    right_value=$(ipv4_to_uint "$right_ip") || return 2
+    if (( 10#$left_prefix == 0 )); then left_mask=0; else left_mask=$(( (0xFFFFFFFF << (32 - 10#$left_prefix)) & 0xFFFFFFFF )); fi
+    if (( 10#$right_prefix == 0 )); then right_mask=0; else right_mask=$(( (0xFFFFFFFF << (32 - 10#$right_prefix)) & 0xFFFFFFFF )); fi
+    left_start=$(( left_value & left_mask )); right_start=$(( right_value & right_mask ))
+    left_end=$(( left_start | (0xFFFFFFFF ^ left_mask) ))
+    right_end=$(( right_start | (0xFFFFFFFF ^ right_mask) ))
+    (( left_start <= right_end && right_start <= left_end ))
+}
+
+find_tun_address_conflict() {
+    local candidate=$1 route_line route_cidr
+    valid_ipv4_cidr "$candidate" || { printf 'TUN 地址格式无效：%s' "$candidate"; return 0; }
+    if [[ -n ${WG_SERVER_ADDRESS:-} ]] && cidr_overlaps "$candidate" "$WG_SERVER_ADDRESS"; then
+        printf 'WireGuard 网段 %s' "$WG_SERVER_ADDRESS"
+        return 0
+    fi
+    command_exists ip || return 1
+    while IFS= read -r route_line; do
+        [[ $route_line == *" dev ${TUN_INTERFACE:-pingtun0} "* || $route_line == *" dev ${TUN_INTERFACE:-pingtun0}" ]] && continue
+        route_cidr=${route_line%% *}
+        [[ $route_cidr == default ]] && continue
+        [[ $route_cidr == */* ]] || route_cidr=${route_cidr}/32
+        valid_ipv4_cidr "$route_cidr" || continue
+        if cidr_overlaps "$candidate" "$route_cidr"; then
+            printf '系统路由 %s' "$route_cidr"
+            return 0
+        fi
+    done < <(ip -4 route show table main 2>/dev/null || true)
+    return 1
+}
+
+choose_available_tun_address() {
+    local candidate conflict
+    for candidate in 198.18.0.1/30 198.19.255.1/30 192.0.2.1/30 192.0.2.5/30 172.31.255.1/30; do
+        conflict=$(find_tun_address_conflict "$candidate" || true)
+        [[ -z $conflict ]] && { printf '%s' "$candidate"; return 0; }
+    done
+    return 1
+}
+
 current_node_setting() {
     local id
     [[ -r $PING_WG_CURRENT_FILE ]] || return 1
@@ -226,6 +283,8 @@ write_settings() {
         printf 'CLIENT_NAME=%q\n' "$CLIENT_NAME"
         printf 'TUN_INTERFACE=%q\n' "$TUN_INTERFACE"
         printf 'TUN_ADDRESS=%q\n' "$TUN_ADDRESS"
+        printf 'TUN_TABLE_INDEX=%q\n' "$TUN_TABLE_INDEX"
+        printf 'TUN_RULE_INDEX=%q\n' "$TUN_RULE_INDEX"
     } > "$tmp"
     chmod 0600 "$tmp"
     mv -f "$tmp" "$PING_WG_SETTINGS_FILE"
@@ -242,5 +301,7 @@ default_settings() {
     PUBLIC_INTERFACE=''
     CLIENT_NAME=client
     TUN_INTERFACE=pingtun0
-    TUN_ADDRESS=172.19.0.1/30
+    TUN_ADDRESS=198.18.0.1/30
+    TUN_TABLE_INDEX=20220
+    TUN_RULE_INDEX=9200
 }
